@@ -1,0 +1,8 @@
+{
+  "name": "Ink Link",
+  "description": "The premier AI-powered tattoo platform connecting artists, studios, and enthusiasts with next-gen design tools.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
