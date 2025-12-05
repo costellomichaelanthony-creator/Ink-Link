@@ -1,175 +1,286 @@
+import React, { useRef, useState } from "react";
+import { DesignConcept } from "../../types";
 
-import React, { useState, useRef, useEffect } from 'react';
-import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../services/supabase';
-import { DesignConcept } from '../../types';
-
-interface Props {
+interface VirtualTryOnProps {
   savedConcepts: DesignConcept[];
 }
 
-const VirtualTryOn: React.FC<Props> = ({ savedConcepts }) => {
-  const { user } = useAuth();
+// Utility: turn nearly-white pixels transparent
+const stripWhiteBackground = (src: string): Promise<string> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(src);
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+
+      // Any pixel that's very close to white → alpha = 0
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        // tweak 240 threshold if needed (lower = more aggressive)
+        if (r > 240 && g > 240 && b > 240) {
+          data[i + 3] = 0;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => resolve(src);
+    img.src = src;
+  });
+
+const VirtualTryOn: React.FC<VirtualTryOnProps> = ({ savedConcepts }) => {
   const [bodyImage, setBodyImage] = useState<string | null>(null);
-  const [overlayImage, setOverlayImage] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  
-  // Transform State
+  const [selectedConcept, setSelectedConcept] = useState<DesignConcept | null>(
+    null
+  );
+  const [overlaySrc, setOverlaySrc] = useState<string | null>(null);
+
+  // tattoo controls
   const [scale, setScale] = useState(1);
   const [rotation, setRotation] = useState(0);
-  const [opacity, setOpacity] = useState(0.9);
-  const [posX, setPosX] = useState(50); // percentage
-  const [posY, setPosY] = useState(50); // percentage
+  const [opacity, setOpacity] = useState(0.8);
+  const [position, setPosition] = useState({ x: 0.5, y: 0.5 }); // relative (0–1)
 
-  const handleBodyUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files[0] || !user) return;
-    const file = e.target.files[0];
-    
-    // For preview, we can just use local object URL to be fast
-    const objectUrl = URL.createObjectURL(file);
-    setBodyImage(objectUrl);
-    
-    // In background, could upload to Supabase if we want to save the "session"
+  const [isDragging, setIsDragging] = useState(false);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  const handleBodyUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setBodyImage(ev.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleSavePreview = async () => {
-    if (!user || !bodyImage || !overlayImage) return;
-    setUploading(true);
-    
-    try {
-      // Logic to actually save would involve uploading the body image blob to Supabase Storage
-      // and then saving the record to 'design_previews'.
-      // For this stub, we'll just simulate a save.
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      alert("Preview saved successfully!");
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setUploading(false);
-    }
+  const handleSelectConcept = async (concept: DesignConcept) => {
+    setSelectedConcept(concept);
+    setScale(1);
+    setRotation(0);
+    setOpacity(0.8);
+    setPosition({ x: 0.5, y: 0.5 });
+
+    // generate transparent version of the tattoo
+    const cleaned = await stripWhiteBackground(concept.image_url);
+    setOverlaySrc(cleaned);
   };
+
+  const handleMouseDownTattoo = (
+    e: React.MouseEvent<HTMLDivElement, MouseEvent>
+  ) => {
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const updatePositionFromPoint = (clientX: number, clientY: number) => {
+    if (!previewRef.current) return;
+
+    const bounds = previewRef.current.getBoundingClientRect();
+    const x = (clientX - bounds.left) / bounds.width;
+    const y = (clientY - bounds.top) / bounds.height;
+
+    setPosition({
+      x: Math.min(1, Math.max(0, x)),
+      y: Math.min(1, Math.max(0, y)),
+    });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    if (!isDragging) return;
+    updatePositionFromPoint(e.clientX, e.clientY);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const touch = e.touches[0];
+    if (!touch) return;
+    updatePositionFromPoint(touch.clientX, touch.clientY);
+  };
+
+  const currentOverlay = overlaySrc || selectedConcept?.image_url || null;
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6">
-      {/* Controls Sidebar */}
-      <div className="lg:w-1/3 space-y-6">
-        {/* Step 1: Upload Body */}
-        <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
-          <h3 className="font-bold text-white mb-4">1. Upload Body Photo</h3>
-          <label className="block w-full cursor-pointer bg-ink-950 border-2 border-dashed border-ink-700 rounded-lg p-6 text-center hover:border-brand transition-colors">
-             <i className="fa-solid fa-camera text-2xl text-gray-400 mb-2"></i>
-             <p className="text-sm text-gray-400">Click to upload photo</p>
-             <input type="file" accept="image/*" className="hidden" onChange={handleBodyUpload} />
-          </label>
-        </div>
-
-        {/* Step 2: Select Tattoo */}
-        <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
-          <h3 className="font-bold text-white mb-4">2. Select Design</h3>
-          {savedConcepts.length === 0 ? (
-            <p className="text-gray-500 text-sm">Generate and save concepts first.</p>
-          ) : (
-            <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto">
-              {savedConcepts.map(concept => (
-                <button 
-                  key={concept.id}
-                  onClick={() => setOverlayImage(concept.image_url)}
-                  className={`border-2 rounded-lg overflow-hidden h-20 ${overlayImage === concept.image_url ? 'border-brand' : 'border-transparent'}`}
-                >
-                  <img src={concept.image_url} className="w-full h-full object-cover" />
-                </button>
-              ))}
-            </div>
-          )}
-          
-           <div className="mt-4 pt-4 border-t border-ink-800">
-              <p className="text-xs text-gray-400 mb-2">Or paste URL:</p>
-              <input 
-                type="text" 
-                placeholder="https://..." 
-                className="w-full bg-ink-950 border border-ink-700 rounded px-2 py-1 text-xs text-white"
-                onChange={(e) => setOverlayImage(e.target.value)}
-              />
-           </div>
-        </div>
-
-        {/* Step 3: Adjust */}
-        {overlayImage && (
-          <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
-             <h3 className="font-bold text-white mb-4">3. Adjust Placement</h3>
-             
-             <div className="space-y-4">
-                <div>
-                  <label className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Scale</span> <span>{scale.toFixed(1)}x</span>
-                  </label>
-                  <input type="range" min="0.1" max="3" step="0.1" value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} className="w-full accent-brand" />
-                </div>
-                <div>
-                  <label className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Rotation</span> <span>{rotation}°</span>
-                  </label>
-                  <input type="range" min="0" max="360" value={rotation} onChange={(e) => setRotation(parseInt(e.target.value))} className="w-full accent-brand" />
-                </div>
-                 <div>
-                  <label className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Opacity</span> <span>{Math.round(opacity * 100)}%</span>
-                  </label>
-                  <input type="range" min="0.1" max="1" step="0.1" value={opacity} onChange={(e) => setOpacity(parseFloat(e.target.value))} className="w-full accent-brand" />
-                </div>
-                <div>
-                   <label className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Position X/Y</span>
-                  </label>
-                   <div className="grid grid-cols-2 gap-2">
-                      <input type="range" min="0" max="100" value={posX} onChange={(e) => setPosX(parseInt(e.target.value))} className="w-full accent-brand" />
-                      <input type="range" min="0" max="100" value={posY} onChange={(e) => setPosY(parseInt(e.target.value))} className="w-full accent-brand" />
-                   </div>
-                </div>
-             </div>
-          </div>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* 1. Upload body photo */}
+      <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
+        <h3 className="text-white font-bold mb-3">1. Upload Body Photo</h3>
+        <p className="text-sm text-gray-400 mb-4">
+          Upload a clear photo of the area where you want the tattoo. Front-facing,
+          good lighting works best.
+        </p>
+        <label className="flex flex-col items-center justify-center border border-dashed border-ink-700 rounded-lg py-10 cursor-pointer hover:border-brand/70 transition-colors">
+          <span className="text-gray-400 text-sm mb-2">
+            Click to upload photo
+          </span>
+          <span className="text-xs text-gray-500">PNG or JPG up to ~10MB</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleBodyUpload}
+          />
+        </label>
+        {bodyImage && (
+          <p className="text-xs text-gray-500 mt-2">
+            Photo uploaded. You can change it by clicking the upload area again.
+          </p>
         )}
-        
-        <button 
-           onClick={handleSavePreview}
-           disabled={!user || !bodyImage || uploading}
-           className="w-full py-3 bg-brand text-white rounded-lg hover:bg-brand-hover disabled:opacity-50"
-        >
-          {uploading ? 'Saving...' : 'Save Preview'}
-        </button>
       </div>
 
-      {/* Canvas Area */}
-      <div className="lg:w-2/3 bg-black rounded-xl border border-ink-800 overflow-hidden relative min-h-[500px] flex items-center justify-center">
-         {!bodyImage ? (
-           <div className="text-gray-600 text-center">
-             <i className="fa-solid fa-image text-4xl mb-4"></i>
-             <p>Upload a body photo to start</p>
-           </div>
-         ) : (
-           <div className="relative w-full h-full overflow-hidden">
-             <img src={bodyImage} alt="Body" className="w-full h-full object-contain pointer-events-none select-none" />
-             
-             {overlayImage && (
-               <div 
-                 className="absolute w-48 h-48 cursor-move"
-                 style={{
-                   left: `${posX}%`,
-                   top: `${posY}%`,
-                   transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`,
-                   opacity: opacity,
-                   mixBlendMode: 'multiply' // Helps tattoo look realistic on skin
-                 }}
-               >
-                 <img src={overlayImage} alt="Tattoo Overlay" className="w-full h-full object-contain drop-shadow-xl" />
-               </div>
-             )}
-           </div>
-         )}
-         
-         <div className="absolute top-4 right-4 bg-black/70 px-3 py-1 rounded text-xs text-gray-300 pointer-events-none">
-           Virtual Try-On Preview
-         </div>
+      {/* 2. Select concept */}
+      <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
+        <h3 className="text-white font-bold mb-3">2. Select a Tattoo Concept</h3>
+        {savedConcepts.length === 0 ? (
+          <p className="text-gray-500 text-sm">
+            Generate a concept first, then you can try it on here.
+          </p>
+        ) : (
+          <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+            {savedConcepts.map((concept) => (
+              <button
+                key={concept.id}
+                type="button"
+                onClick={() => handleSelectConcept(concept)}
+                className={`w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors ${
+                  selectedConcept?.id === concept.id
+                    ? "border-brand bg-brand/10"
+                    : "border-ink-800 hover:border-ink-600 hover:bg-ink-800/60"
+                }`}
+              >
+                <div className="w-16 h-16 bg-ink-950 rounded overflow-hidden flex items-center justify-center">
+                  <img
+                    src={concept.image_url}
+                    alt="Concept thumb"
+                    className="max-w-full max-h-full object-contain"
+                  />
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-gray-300 line-clamp-2">
+                    {concept.prompt}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 3. Virtual try-on preview */}
+      <div className="bg-ink-900 rounded-xl border border-ink-800 p-6">
+        <h3 className="text-white font-bold mb-3">3. Virtual Try-On Preview</h3>
+
+        <div
+          ref={previewRef}
+          className="relative w-full aspect-[3/4] bg-ink-950 rounded-lg overflow-hidden flex items-center justify-center"
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onTouchMove={handleTouchMove}
+        >
+          {bodyImage ? (
+            <img
+              src={bodyImage}
+              alt="Body"
+              className="w-full h-full object-cover pointer-events-none"
+            />
+          ) : (
+            <p className="text-gray-500 text-sm text-center px-4">
+              Upload a body photo on the left to see the virtual try-on.
+            </p>
+          )}
+
+          {/* Tattoo overlay */}
+          {bodyImage && currentOverlay && (
+            <div
+              onMouseDown={handleMouseDownTattoo}
+              className="absolute cursor-move"
+              style={{
+                left: `${position.x * 100}%`,
+                top: `${position.y * 100}%`,
+                transform: `translate(-50%, -50%) scale(${scale}) rotate(${rotation}deg)`,
+                opacity,
+              }}
+            >
+              <img
+                src={currentOverlay}
+                alt="Tattoo overlay"
+                className="max-w-[320px] max-h-[320px] object-contain"
+              />
+            </div>
+          )}
+        </div>
+
+        {/* controls */}
+        {bodyImage && currentOverlay && (
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="flex justify-between text-xs text-gray-400 mb-1">
+                <span>Size</span>
+                <span>{(scale * 100).toFixed(0)}%</span>
+              </label>
+              <input
+                type="range"
+                min={0.1}      // much smaller
+                max={3}        // much larger
+                step={0.05}
+                value={scale}
+                onChange={(e) => setScale(parseFloat(e.target.value))}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="flex justify-between text-xs text-gray-400 mb-1">
+                <span>Rotation</span>
+                <span>{rotation.toFixed(0)}°</span>
+              </label>
+              <input
+                type="range"
+                min={-90}
+                max={90}
+                step={1}
+                value={rotation}
+                onChange={(e) => setRotation(parseFloat(e.target.value))}
+                className="w-full"
+              />
+            </div>
+
+            <div>
+              <label className="flex justify-between text-xs text-gray-400 mb-1">
+                <span>Opacity</span>
+                <span>{Math.round(opacity * 100)}%</span>
+              </label>
+              <input
+                type="range"
+                min={0.2}
+                max={1}
+                step={0.05}
+                value={opacity}
+                onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                className="w-full"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

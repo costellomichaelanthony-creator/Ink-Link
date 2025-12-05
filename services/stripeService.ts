@@ -1,63 +1,67 @@
+// services/stripeService.ts
+import { loadStripe, Stripe } from "@stripe/stripe-js";
 
-import { loadStripe } from '@stripe/stripe-js';
+let stripePromise: Promise<Stripe | null> | null = null;
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '');
+export const getStripe = () => {
+  const key = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
 
-export const createDesignCheckoutSession = async (designId: string, userId: string) => {
-  try {
-    const response = await fetch('/api/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        type: 'design',
-        designId,
-        userId,
-      }),
-    });
-
-    const { sessionId, error } = await response.json();
-
-    if (error) throw new Error(error);
-
-    const stripe = await stripePromise;
-    if (stripe) {
-      const { error: stripeError } = await stripe.redirectToCheckout({ sessionId });
-      if (stripeError) throw stripeError;
-    }
-  } catch (error) {
-    console.error('Checkout Error:', error);
-    throw error;
+  if (!key) {
+    console.warn("Stripe publishable key not set; Stripe is disabled.");
+    return Promise.resolve(null);
   }
+
+  if (!stripePromise) {
+    stripePromise = loadStripe(key);
+  }
+
+  return stripePromise;
 };
 
-export const createBookingDepositSession = async (bookingId: string, amountCents: number, userId: string) => {
-  try {
-    const response = await fetch('/api/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        type: 'booking_deposit',
-        bookingId,
-        amountCents,
-        userId,
-      }),
-    });
+/**
+ * TEMP STUB:
+ * Satisfies imports from DesignDetail.tsx without actually charging anyone.
+ * Later, replace with a real backend call that creates a Checkout Session.
+ */
+export const createDesignCheckoutSession = async (designId: string) => {
+  const stripe = await getStripe();
 
-    const { sessionId, error } = await response.json();
-
-    if (error) throw new Error(error);
-
-    const stripe = await stripePromise;
-    if (stripe) {
-      const { error: stripeError } = await stripe.redirectToCheckout({ sessionId });
-      if (stripeError) throw stripeError;
-    }
-  } catch (error) {
-    console.error('Checkout Error:', error);
-    throw error;
+  if (!stripe) {
+    console.warn(
+      "Stripe is not configured yet. Skipping design checkout for:",
+      designId
+    );
+    alert("Payments for designs are not live yet, but the rest of Ink Link works!");
+    return;
   }
+
+  // TODO: real backend call + redirectToCheckout
+  console.log(
+    "[Stub] Would create Stripe Checkout session for design:",
+    designId
+  );
+};
+
+/**
+ * TEMP STUB:
+ * Satisfies imports from BookingDetail.tsx without actually charging anyone.
+ * Later, replace with a real backend call for booking deposits.
+ */
+export const createBookingDepositSession = async (bookingId: string) => {
+  const stripe = await getStripe();
+
+  if (!stripe) {
+    console.warn(
+      "Stripe is not configured yet. Skipping booking deposit for:",
+      bookingId
+    );
+    alert("Booking deposits are not live yet, but the rest of Ink Link works!");
+    return;
+  }
+
+  // TODO: real backend call + redirectToCheckout
+  console.log(
+    "[Stub] Would create Stripe Checkout session for booking deposit:",
+    bookingId
+  );
 };
